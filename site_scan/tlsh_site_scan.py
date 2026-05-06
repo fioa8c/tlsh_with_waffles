@@ -246,34 +246,35 @@ def cmd_hash(args: argparse.Namespace) -> int:
     counts = {"hashed": 0, "skipped_entropy": 0, "errors": 0}
     workers = max(1, args.workers)
 
+    def _consume(it: Iterable, out) -> None:
+        for path, digest, size, mtime, skip in it:
+            if skip == "io_error":
+                counts["errors"] += 1
+                continue
+            if skip == "low_entropy" or digest is None:
+                counts["skipped_entropy"] += 1
+                continue
+            out.write(f"{path}\t{digest}\t{size}\t{mtime}\n")
+            counts["hashed"] += 1
+            if counts["hashed"] % 500 == 0:
+                print(
+                    f"hashed {counts['hashed']} skipped {counts['skipped_entropy']} errors {counts['errors']}",
+                    file=sys.stderr,
+                )
+
     try:
         with open(tmp_path, "w", encoding="utf-8") as out:
             out.write(_HASH_TSV_HEADER)
-            iterator: Iterable
             if workers == 1:
-                iterator = (hash_one_file(str(p)) for p in paths)
+                _consume((hash_one_file(str(p)) for p in paths), out)
             else:
-                pool = multiprocessing.Pool(workers)
-                iterator = pool.imap_unordered(hash_one_file, [str(p) for p in paths], chunksize=32)
-
-            for path, digest, size, mtime, skip in iterator:
-                if skip == "io_error":
-                    counts["errors"] += 1
-                    continue
-                if skip == "low_entropy" or digest is None:
-                    counts["skipped_entropy"] += 1
-                    continue
-                out.write(f"{path}\t{digest}\t{size}\t{mtime}\n")
-                counts["hashed"] += 1
-                if counts["hashed"] % 500 == 0:
-                    print(
-                        f"hashed {counts['hashed']} skipped {counts['skipped_entropy']} errors {counts['errors']}",
-                        file=sys.stderr,
+                # Context-managed pool so workers are terminated even on
+                # mid-iteration exceptions (KeyboardInterrupt, disk full, etc.).
+                with multiprocessing.Pool(workers) as pool:
+                    _consume(
+                        pool.imap_unordered(hash_one_file, [str(p) for p in paths], chunksize=32),
+                        out,
                     )
-
-            if workers != 1:
-                pool.close()
-                pool.join()
 
         os.replace(tmp_path, out_path)
     except BaseException:
