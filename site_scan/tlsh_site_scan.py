@@ -310,6 +310,34 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
+def scan_one_digest(
+    site_digest: str,
+    threats: "list[tuple[tlsh.Tlsh, str, str]]",
+    index: "dict[int, list[int]]",
+    *,
+    threshold: int,
+    top_n: int,
+    band: int,
+) -> "list[tuple[int, str, str]]":
+    """For one site digest, return top-N matches: list of (distance, threat_digest, threat_path).
+
+    Sorted by (distance, threat_path); empty list if no candidates pass threshold.
+    """
+    s = tlsh.Tlsh()
+    try:
+        s.fromTlshStr(site_digest)
+    except (ValueError, TypeError):
+        return []
+    scored: "list[tuple[int, str, str]]" = []
+    for ti in candidate_indices(s.lvalue, band, index):
+        t_obj, t_digest, t_path = threats[ti]
+        d = s.diff(t_obj)
+        if d <= threshold:
+            scored.append((d, t_digest, t_path))
+    scored.sort(key=lambda r: (r[0], r[2]))
+    return scored[:top_n]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)

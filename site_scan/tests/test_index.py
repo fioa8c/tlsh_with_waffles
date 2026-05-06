@@ -53,3 +53,36 @@ def test_candidate_indices_missing_buckets_return_empty():
     sparse = {10: [99]}
     assert list(candidate_indices(10, 2, sparse)) == [99]
     assert list(candidate_indices(50, 2, sparse)) == []
+
+
+from site_scan.tlsh_site_scan import scan_one_digest
+
+
+def test_scan_one_digest_finds_self_match():
+    """A site digest identical to a threat digest should match at distance 0."""
+    threats = _make_threats()
+    index = build_lvalue_index(threats)
+    # Use the first threat's digest as the site digest.
+    site_digest = threats[0][1]
+    matches = scan_one_digest(site_digest, threats, index, threshold=40, top_n=3, band=3)
+    assert matches, "expected at least one match"
+    # Closest match must be the self-match.
+    assert matches[0][0] == 0
+
+
+def test_scan_one_digest_top_n_limit():
+    threats = _make_threats()
+    index = build_lvalue_index(threats)
+    site_digest = threats[0][1]
+    # Set huge threshold to admit everything.
+    matches = scan_one_digest(site_digest, threats, index, threshold=10_000, top_n=2, band=128)
+    assert len(matches) <= 2
+
+
+def test_scan_one_digest_no_match_returns_empty():
+    threats = _make_threats()
+    index = build_lvalue_index(threats)
+    site_digest = threats[0][1]
+    # Threshold of -1 admits nothing (band=0, but also distance >= 0 > -1).
+    matches = scan_one_digest(site_digest, threats, index, threshold=-1, top_n=3, band=0)
+    assert matches == []
