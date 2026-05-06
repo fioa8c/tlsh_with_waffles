@@ -8,8 +8,11 @@ See docs/superpowers/specs/2026-05-06-tlsh-site-scanner-design.md for design.
 """
 from __future__ import annotations
 
+import argparse
+import multiprocessing
 import os
 import sys
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -218,8 +221,99 @@ def hash_one_file(
     return (path, t.hexdigest(), st.st_size, st.st_mtime, None)
 
 
+_HASH_TSV_HEADER = "site_path\tdigest\tsize\tmtime\n"
+
+
+def cmd_hash(args: argparse.Namespace) -> int:
+    ext_set = {e.strip().lower().lstrip(".") for e in args.ext.split(",") if e.strip()}
+    exclude_dirs = set(args.exclude_dir) if args.exclude_dir else set(DEFAULT_EXCLUDE_DIRS)
+
+    paths = list(walk_site(
+        root=args.site,
+        ext_set=ext_set if ext_set else DEFAULT_EXTENSIONS,
+        exclude_dirs=exclude_dirs,
+        follow_symlinks=args.follow_symlinks,
+        include_hidden=args.include_hidden,
+        min_size=args.min_size,
+        max_size=args.max_size,
+    ))
+
+    out_path = Path(args.out)
+    tmp_fd, tmp_name = tempfile.mkstemp(prefix=out_path.name + ".", dir=str(out_path.parent))
+    os.close(tmp_fd)
+    tmp_path = Path(tmp_name)
+
+    counts = {"hashed": 0, "skipped_entropy": 0, "errors": 0}
+    workers = max(1, args.workers)
+
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as out:
+            out.write(_HASH_TSV_HEADER)
+            iterator: Iterable
+            if workers == 1:
+                iterator = (hash_one_file(str(p)) for p in paths)
+            else:
+                pool = multiprocessing.Pool(workers)
+                iterator = pool.imap_unordered(hash_one_file, [str(p) for p in paths], chunksize=32)
+
+            for path, digest, size, mtime, skip in iterator:
+                if skip == "io_error":
+                    counts["errors"] += 1
+                    continue
+                if skip == "low_entropy" or digest is None:
+                    counts["skipped_entropy"] += 1
+                    continue
+                out.write(f"{path}\t{digest}\t{size}\t{mtime}\n")
+                counts["hashed"] += 1
+                if counts["hashed"] % 500 == 0:
+                    print(
+                        f"hashed {counts['hashed']} skipped {counts['skipped_entropy']} errors {counts['errors']}",
+                        file=sys.stderr,
+                    )
+
+            if workers != 1:
+                pool.close()
+                pool.join()
+
+        os.replace(tmp_path, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    print(
+        f"done: hashed={counts['hashed']} skipped_entropy={counts['skipped_entropy']} errors={counts['errors']}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="tlsh_site_scan", description=__doc__)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    h = sub.add_parser("hash", help="walk a site, hash files, write digest TSV")
+    h.add_argument("--site", required=True)
+    h.add_argument("--out", required=True)
+    h.add_argument("--ext", default=",".join(sorted(DEFAULT_EXTENSIONS)))
+    h.add_argument("--exclude-dir", action="append", default=None,
+                   help="repeat to exclude multiple dir basenames; replaces defaults if provided")
+    h.add_argument("--min-size", type=int, default=50)
+    h.add_argument("--max-size", type=int, default=5_242_880)
+    h.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) // 2))
+    h.add_argument("--follow-symlinks", action="store_true")
+    h.add_argument("--include-hidden", action="store_true")
+    h.set_defaults(func=cmd_hash)
+
+    return p
+
+
 def main(argv: list[str] | None = None) -> int:
-    raise NotImplementedError("argparse + subcommands not yet wired")
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+    return args.func(args)
 
 
 if __name__ == "__main__":
