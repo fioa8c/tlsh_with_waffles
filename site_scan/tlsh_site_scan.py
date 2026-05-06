@@ -245,22 +245,37 @@ def cmd_hash(args: argparse.Namespace) -> int:
 
     counts = {"hashed": 0, "skipped_entropy": 0, "errors": 0}
     workers = max(1, args.workers)
+    total = len(paths)
+
+    # Single-line progress bar only when stderr is a TTY — keeps log files
+    # and CI output clean.
+    show_progress = sys.stderr.isatty() and total > 0
+    update_every = max(1, total // 200) if show_progress else 0
+
+    def _render_progress(done: int) -> None:
+        bar_len = 30
+        filled = int(bar_len * done / total) if total else bar_len
+        bar = "#" * filled + "-" * (bar_len - filled)
+        pct = (done / total * 100) if total else 100.0
+        print(
+            f"\r[{bar}] {done}/{total} ({pct:5.1f}%) "
+            f"hashed={counts['hashed']} skipped={counts['skipped_entropy']} errors={counts['errors']}",
+            file=sys.stderr, end="", flush=True,
+        )
 
     def _consume(it: Iterable, out) -> None:
+        done = 0
         for path, digest, size, mtime, skip in it:
+            done += 1
             if skip == "io_error":
                 counts["errors"] += 1
-                continue
-            if skip == "low_entropy" or digest is None:
+            elif skip == "low_entropy" or digest is None:
                 counts["skipped_entropy"] += 1
-                continue
-            out.write(f"{path}\t{digest}\t{size}\t{mtime}\n")
-            counts["hashed"] += 1
-            if counts["hashed"] % 500 == 0:
-                print(
-                    f"hashed {counts['hashed']} skipped {counts['skipped_entropy']} errors {counts['errors']}",
-                    file=sys.stderr,
-                )
+            else:
+                out.write(f"{path}\t{digest}\t{size}\t{mtime}\n")
+                counts["hashed"] += 1
+            if show_progress and (done % update_every == 0 or done == total):
+                _render_progress(done)
 
     try:
         with open(tmp_path, "w", encoding="utf-8") as out:
@@ -278,11 +293,16 @@ def cmd_hash(args: argparse.Namespace) -> int:
 
         os.replace(tmp_path, out_path)
     except BaseException:
+        if show_progress:
+            print(file=sys.stderr)  # finish progress line before traceback
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
         raise
+
+    if show_progress:
+        print(file=sys.stderr)  # newline after final progress line
 
     print(
         f"done: hashed={counts['hashed']} skipped_entropy={counts['skipped_entropy']} errors={counts['errors']}",
