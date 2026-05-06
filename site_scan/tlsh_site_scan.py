@@ -195,6 +195,29 @@ def walk_site(
             yield full
 
 
+def hash_one_file(
+    path: str,
+) -> "tuple[str, str | None, int | None, float | None, str | None]":
+    """Hash one file, returning (path, digest_or_None, size, mtime, skip_reason).
+
+    skip_reason ∈ {None, 'io_error', 'low_entropy'}. Used as a worker-process
+    callable in multiprocessing.Pool, so it MUST be top-level (picklable) and
+    catch all expected file-system errors.
+    """
+    try:
+        st = os.stat(path)
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return (path, None, None, None, "io_error")
+    t = tlsh.Tlsh()
+    t.update(data)
+    t.final()
+    if not t.is_valid:                  # property — no parens
+        return (path, None, st.st_size, st.st_mtime, "low_entropy")
+    return (path, t.hexdigest(), st.st_size, st.st_mtime, None)
+
+
 def main(argv: list[str] | None = None) -> int:
     raise NotImplementedError("argparse + subcommands not yet wired")
 
