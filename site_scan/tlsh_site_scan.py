@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 import tlsh
 
@@ -86,6 +86,39 @@ def _warn(msg: str) -> None:
     elif n == _WARN_LIMIT_PER_KIND:
         print(f"warn: (further '{kind}' warnings suppressed)", file=sys.stderr)
     _warn_counts[kind] = n + 1
+
+
+def parse_site_digests_file(path: "Path | str") -> "Iterator[tuple[str, str]]":
+    """Yield (site_path, digest) tuples from a site-digests TSV.
+
+    Format: <site_path>\\t<digest>[\\t<extra>...]. Header line (`site_path\\t`-prefixed
+    first non-blank line) is detected and skipped. Lines that fail digest validation
+    are skipped with a stderr warning.
+    """
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        first_data_line_seen = False
+        for line_no, raw in enumerate(fh, start=1):
+            line = raw.rstrip("\n").rstrip("\r")
+            if not line or line.startswith("#"):
+                continue
+            cols = line.split("\t")
+            if len(cols) < 2:
+                _warn(f"{path}:{line_no}: malformed (expected >=2 cols, got {len(cols)})")
+                continue
+            site_path, digest = cols[0], cols[1]
+            if not first_data_line_seen and site_path == "site_path" and digest == "digest":
+                first_data_line_seen = True
+                continue  # header
+            first_data_line_seen = True
+            t = tlsh.Tlsh()
+            try:
+                err = t.fromTlshStr(digest)
+            except (ValueError, TypeError):
+                err = 1
+            if err:
+                _warn(f"{path}:{line_no}: invalid digest")
+                continue
+            yield site_path, digest
 
 
 def main(argv: list[str] | None = None) -> int:

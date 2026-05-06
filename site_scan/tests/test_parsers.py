@@ -85,3 +85,50 @@ def test_parse_threats_empty_file(tmp_path):
     accepted, stats = parse_threats_file(f)
     assert accepted == []
     assert stats == {"accepted": 0, "invalid": 0, "malformed": 0}
+
+
+from site_scan.tlsh_site_scan import parse_site_digests_file
+
+
+def test_parse_site_digests_with_header(tmp_path, real_digest):
+    body = (
+        "site_path\tdigest\tsize\tmtime\n"
+        f"/site/a.php\t{real_digest}\t512\t1700000000.0\n"
+        f"/site/b.php\t{real_digest}\t800\t1700000001.0\n"
+    )
+    f = _write(tmp_path, "site.tsv", body)
+    rows = list(parse_site_digests_file(f))
+    assert rows == [
+        ("/site/a.php", real_digest),
+        ("/site/b.php", real_digest),
+    ]
+
+
+def test_parse_site_digests_two_columns_no_header(tmp_path, real_digest):
+    """External tools may produce just <path>\t<digest> with no header. Accept."""
+    body = (
+        f"/site/a.php\t{real_digest}\n"
+        f"/site/b.php\t{real_digest}\n"
+    )
+    f = _write(tmp_path, "site.tsv", body)
+    rows = list(parse_site_digests_file(f))
+    assert rows == [
+        ("/site/a.php", real_digest),
+        ("/site/b.php", real_digest),
+    ]
+
+
+def test_parse_site_digests_skips_invalid_and_blanks(tmp_path, real_digest):
+    body = (
+        f"/site/a.php\t{real_digest}\n"
+        "\n"
+        f"/site/bad.php\tNOT_A_DIGEST\n"
+        f"/site/single_col\n"
+        f"/site/c.php\t{real_digest}\n"
+    )
+    f = _write(tmp_path, "site.tsv", body)
+    rows = list(parse_site_digests_file(f))
+    assert rows == [
+        ("/site/a.php", real_digest),
+        ("/site/c.php", real_digest),
+    ]
