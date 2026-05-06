@@ -30,3 +30,11 @@ Windows/rand_tags/rand_tags.VC2008.vcproj.*
 Windows/rand_tags/Debug/
 Windows/rand_tags/Release/
 *.log
+*.tlsh
+*.tsv
+
+# Python build artifacts (py_ext)
+__pycache__/
+*.pyc
+py_ext/dist/
+py_ext/tlsh.egg-info/
