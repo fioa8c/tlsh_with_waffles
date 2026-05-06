@@ -70,3 +70,23 @@ def test_hash_command_empty_site(tmp_path):
     # Header present, no rows.
     text = out.read_text()
     assert text == "site_path\tdigest\tsize\tmtime\n"
+
+
+def test_hash_command_all_files_too_small_yields_empty_tsv(tmp_path):
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "tiny.php").write_bytes(b"<?php\n")  # < 50 bytes
+    out = tmp_path / "site_digests.tsv"
+    res = _run_hash(site, out)
+    assert res.returncode == 0
+    assert out.read_text() == "site_path\tdigest\tsize\tmtime\n"
+
+
+def test_hash_command_help_works():
+    res = subprocess.run(
+        [sys.executable, "-m", "site_scan.tlsh_site_scan", "hash", "--help"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert res.returncode == 0
+    assert "--site" in res.stdout
+    assert "--out" in res.stdout

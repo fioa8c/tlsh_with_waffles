@@ -74,3 +74,53 @@ def test_scan_empty_threat_list_exits_2(tmp_path):
     out = tmp_path / "matches.tsv"
     res = _run_scan(threats, sites, out)
     assert res.returncode == 2
+
+
+def test_scan_command_help_works():
+    res = subprocess.run(
+        [sys.executable, "-m", "site_scan.tlsh_site_scan", "scan", "--help"],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert res.returncode == 0
+    assert "--threats" in res.stdout
+    assert "--site-digests" in res.stdout
+
+
+def test_scan_rejects_negative_threshold(tmp_path):
+    threats = tmp_path / "t.tsv"; threats.write_text("")
+    sites = tmp_path / "s.tsv"; sites.write_text("")
+    out = tmp_path / "m.tsv"
+    res = _run_scan(threats, sites, out, "--threshold", "-1")
+    assert res.returncode == 2
+
+
+def test_scan_rejects_zero_top_n(tmp_path):
+    threats = tmp_path / "t.tsv"; threats.write_text("")
+    sites = tmp_path / "s.tsv"; sites.write_text("")
+    out = tmp_path / "m.tsv"
+    res = _run_scan(threats, sites, out, "--top-n", "0")
+    assert res.returncode == 2
+
+
+def test_scan_top_n_3_with_three_close_threats(tmp_path):
+    """When N>=3 threats are within T, all three should appear with rank 1, 2, 3."""
+    base = FILES["alpha.php"]
+    digests = []
+    for i in range(5):
+        data = base + b"\n#var=" + str(i).encode()
+        t = tlsh.Tlsh(); t.update(data); t.final()
+        digests.append(t.hexdigest())
+    threats = tmp_path / "threats.tsv"
+    threats.write_text("".join(f"{d}\t/threats/v{i}.php\n" for i, d in enumerate(digests)))
+    sites = tmp_path / "sites.tsv"
+    sites.write_text(
+        "site_path\tdigest\tsize\tmtime\n"
+        f"/site/q\t{digests[0]}\t{len(base)}\t1700000000.0\n"
+    )
+    out = tmp_path / "matches.tsv"
+    res = _run_scan(threats, sites, out, "--threshold", "200", "--top-n", "3")
+    assert res.returncode == 0
+    rows = out.read_text().splitlines()[1:]
+    assert len(rows) == 3
+    ranks = [int(r.split("\t")[1]) for r in rows]
+    assert ranks == [1, 2, 3]
