@@ -9,6 +9,7 @@ See docs/superpowers/specs/2026-05-06-tlsh-site-scanner-design.md for design.
 from __future__ import annotations
 
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -119,6 +120,26 @@ def parse_site_digests_file(path: "Path | str") -> "Iterator[tuple[str, str]]":
                 _warn(f"{path}:{line_no}: invalid digest")
                 continue
             yield site_path, digest
+
+
+def build_lvalue_index(
+    threats: "list[tuple[tlsh.Tlsh, str, str]]",
+) -> "dict[int, list[int]]":
+    """Map each Lvalue byte (0-255) to the list of threat indices with that Lvalue."""
+    index: "dict[int, list[int]]" = defaultdict(list)
+    for i, (t, _digest, _path) in enumerate(threats):
+        index[t.lvalue].append(i)
+    return dict(index)
+
+
+def candidate_indices(
+    lvalue: int, band: int, index: "dict[int, list[int]]"
+) -> "Iterator[int]":
+    """Yield threat indices in Lvalue buckets [lvalue-band ... lvalue+band] (mod 256)."""
+    for delta in range(-band, band + 1):
+        bucket = (lvalue + delta) % 256
+        for idx in index.get(bucket, ()):
+            yield idx
 
 
 def main(argv: list[str] | None = None) -> int:
