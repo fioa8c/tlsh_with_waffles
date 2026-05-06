@@ -8,6 +8,7 @@ See docs/superpowers/specs/2026-05-06-tlsh-site-scanner-design.md for design.
 """
 from __future__ import annotations
 
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -140,6 +141,58 @@ def candidate_indices(
         bucket = (lvalue + delta) % 256
         for idx in index.get(bucket, ()):
             yield idx
+
+
+DEFAULT_EXTENSIONS: "frozenset[str]" = frozenset({
+    "php", "php3", "php4", "php5", "php7", "php8", "phtml",
+    "htm", "html", "js",
+})
+
+DEFAULT_EXCLUDE_DIRS: "frozenset[str]" = frozenset({
+    ".git", ".svn", "node_modules", "composer", "wp-includes",
+})
+
+
+def walk_site(
+    root: "Path | str",
+    *,
+    ext_set: "Iterable[str]",
+    exclude_dirs: "Iterable[str]",
+    follow_symlinks: bool,
+    include_hidden: bool,
+    min_size: int,
+    max_size: int,
+) -> "Iterator[Path]":
+    """Yield Path objects for files under `root` that pass all filters.
+
+    - Extension matched case-insensitively against `ext_set` (no leading dot).
+    - Directories whose basename is in `exclude_dirs` are pruned at any depth.
+    - Hidden dirs (basename starts with '.') are pruned unless `include_hidden`.
+    - Files outside [min_size, max_size] are skipped.
+    """
+    ext_set = {e.lower().lstrip(".") for e in ext_set}
+    exclude_dirs = set(exclude_dirs)
+    root = Path(root)
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=follow_symlinks):
+        # In-place prune of dirnames so os.walk doesn't descend.
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in exclude_dirs
+            and (include_hidden or not d.startswith("."))
+        ]
+        for fn in filenames:
+            ext = fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
+            if ext not in ext_set:
+                continue
+            full = Path(dirpath) / fn
+            try:
+                st = full.stat()
+            except OSError:
+                continue
+            if st.st_size < min_size or st.st_size > max_size:
+                continue
+            yield full
 
 
 def main(argv: list[str] | None = None) -> int:
