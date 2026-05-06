@@ -290,6 +290,99 @@ def cmd_hash(args: argparse.Namespace) -> int:
     return 0
 
 
+_SCAN_TSV_HEADER = "site_path\trank\tdistance\tthreat_digest\tthreat_path\n"
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    if args.threshold < 0:
+        print("error: --threshold must be >= 0", file=sys.stderr)
+        return 2
+    if args.top_n <= 0:
+        print("error: --top-n must be >= 1", file=sys.stderr)
+        return 2
+    if args.threshold > 1000:
+        print(
+            f"warn: --threshold={args.threshold} is very loose; "
+            "TLSH distances above ~800 are essentially 'unrelated'",
+            file=sys.stderr,
+        )
+
+    threats, stats = parse_threats_file(args.threats)
+    print(
+        f"loaded {stats['accepted']} threat digests "
+        f"({stats['invalid'] + stats['malformed']} skipped: "
+        f"{stats['invalid']} invalid, {stats['malformed']} malformed)",
+        file=sys.stderr,
+    )
+    if not threats:
+        print("error: no valid threat digests loaded", file=sys.stderr)
+        return 2
+
+    index = build_lvalue_index(threats)
+    band = lvalue_band(args.threshold)
+
+    out_path = Path(args.out)
+    tmp_fd, tmp_name = tempfile.mkstemp(prefix=out_path.name + ".", dir=str(out_path.parent))
+    os.close(tmp_fd)
+    tmp_path = Path(tmp_name)
+
+    rows_buf: "list[tuple[str, int, int, str, str]]" = []
+    counts = {"scanned": 0, "with_match": 0, "total_matches": 0, "candidates_sum": 0}
+
+    try:
+        for site_path, site_digest in parse_site_digests_file(args.site_digests):
+            counts["scanned"] += 1
+            # We could pass band into scan_one_digest, but to compute
+            # candidate count we expand inline:
+            s = tlsh.Tlsh()
+            try:
+                s.fromTlshStr(site_digest)
+            except (ValueError, TypeError):
+                continue
+            cands = list(candidate_indices(s.lvalue, band, index))
+            counts["candidates_sum"] += len(cands)
+            scored = []
+            for ti in cands:
+                t_obj, t_digest, t_path = threats[ti]
+                d = s.diff(t_obj)
+                if d <= args.threshold:
+                    scored.append((d, t_digest, t_path))
+            if not scored:
+                continue
+            scored.sort(key=lambda r: (r[0], r[2]))
+            counts["with_match"] += 1
+            for rank, (d, t_digest, t_path) in enumerate(scored[: args.top_n], start=1):
+                rows_buf.append((site_path, rank, d, t_digest, t_path))
+                counts["total_matches"] += 1
+
+            if counts["scanned"] % 2000 == 0:
+                print(
+                    f"scanned {counts['scanned']} matches {counts['with_match']}",
+                    file=sys.stderr,
+                )
+
+        rows_buf.sort(key=lambda r: (r[0], r[1]))
+        with open(tmp_path, "w", encoding="utf-8") as out:
+            out.write(_SCAN_TSV_HEADER)
+            for r in rows_buf:
+                out.write(f"{r[0]}\t{r[1]}\t{r[2]}\t{r[3]}\t{r[4]}\n")
+        os.replace(tmp_path, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    avg_cands = counts["candidates_sum"] / counts["scanned"] if counts["scanned"] else 0
+    print(
+        f"done: scanned={counts['scanned']} with_match={counts['with_match']} "
+        f"total_matches={counts['total_matches']} avg_candidates={avg_cands:.1f}",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tlsh_site_scan", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -306,6 +399,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     h.add_argument("--follow-symlinks", action="store_true")
     h.add_argument("--include-hidden", action="store_true")
     h.set_defaults(func=cmd_hash)
+
+    s = sub.add_parser("scan", help="match site digests against a threat list")
+    s.add_argument("--threats", required=True)
+    s.add_argument("--site-digests", required=True)
+    s.add_argument("--out", required=True)
+    s.add_argument("--threshold", type=int, default=40)
+    s.add_argument("--top-n", type=int, default=3)
+    s.set_defaults(func=cmd_scan)
 
     return p
 
