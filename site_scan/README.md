@@ -25,6 +25,9 @@ python3 -m site_scan.tlsh_site_scan hash \
     --out  site_digests.tsv
 ```
 
+Paths in the digest and match TSVs are backslash-escaped (`\\`, `\t`, `\n`, `\r`) so
+unusual filenames stay on one row; non-UTF-8 filename bytes are preserved.
+
 Default extensions: `php, php3, php4, php5, php7, php8, phtml, htm, html, js`.
 Default exclude-dirs (basename match at any depth): `.git, .svn, node_modules,
 composer, wp-includes`. Default size band: 50 bytes to 5 MiB.

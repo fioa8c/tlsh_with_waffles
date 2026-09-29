@@ -39,6 +39,33 @@ def lvalue_band(threshold: int) -> int:
     return threshold // _LENGTH_MULT
 
 
+def open_tsv(path: "Path | str", mode: str):
+    """Open a TSV as UTF-8 with surrogateescape so undecodable filename bytes round-trip."""
+    return open(path, mode, encoding="utf-8", errors="surrogateescape", newline="\n" if "w" in mode else None)
+
+
+def escape_tsv_field(s: str) -> str:
+    """Escape backslash, tab, CR and LF so a filename always stays in one TSV field."""
+    return (s.replace("\\", "\\\\").replace("\t", "\\t")
+             .replace("\n", "\\n").replace("\r", "\\r"))
+
+
+def unescape_tsv_field(s: str) -> str:
+    """Inverse of escape_tsv_field."""
+    if "\\" not in s:
+        return s
+    out, i = [], 0
+    while i < len(s):
+        c = s[i]
+        if c == "\\" and i + 1 < len(s) and s[i + 1] in "\\tnr":
+            out.append({"\\": "\\", "t": "\t", "n": "\n", "r": "\r"}[s[i + 1]])
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def parse_threats_file(path: "Path | str") -> "tuple[list[tuple[tlsh.Tlsh, str, str]], dict[str, int]]":
     """Parse a threat list (`<digest>\t<threat_path>` per line) into Tlsh objects.
 
@@ -100,7 +127,7 @@ def parse_site_digests_file(path: "Path | str") -> "Iterator[tuple[str, str]]":
     first non-blank line) is detected and skipped. Lines that fail digest validation
     are skipped with a stderr warning.
     """
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+    with open_tsv(path, "r") as fh:
         first_data_line_seen = False
         for line_no, raw in enumerate(fh, start=1):
             line = raw.rstrip("\n").rstrip("\r")
@@ -110,7 +137,7 @@ def parse_site_digests_file(path: "Path | str") -> "Iterator[tuple[str, str]]":
             if len(cols) < 2:
                 _warn(f"{path}:{line_no}: malformed (expected >=2 cols, got {len(cols)})")
                 continue
-            site_path, digest = cols[0], cols[1]
+            site_path, digest = unescape_tsv_field(cols[0]), cols[1]
             if not first_data_line_seen and site_path == "site_path" and digest == "digest":
                 first_data_line_seen = True
                 continue  # header
@@ -272,13 +299,13 @@ def cmd_hash(args: argparse.Namespace) -> int:
             elif skip == "low_entropy" or digest is None:
                 counts["skipped_entropy"] += 1
             else:
-                out.write(f"{path}\t{digest}\t{size}\t{mtime}\n")
+                out.write(f"{escape_tsv_field(path)}\t{digest}\t{size}\t{mtime}\n")
                 counts["hashed"] += 1
             if show_progress and (done % update_every == 0 or done == total):
                 _render_progress(done)
 
     try:
-        with open(tmp_path, "w", encoding="utf-8") as out:
+        with open_tsv(tmp_path, "w") as out:
             out.write(_HASH_TSV_HEADER)
             if workers == 1:
                 _consume((hash_one_file(str(p)) for p in paths), out)
@@ -383,10 +410,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 )
 
         rows_buf.sort(key=lambda r: (r[0], r[1]))
-        with open(tmp_path, "w", encoding="utf-8") as out:
+        with open_tsv(tmp_path, "w") as out:
             out.write(_SCAN_TSV_HEADER)
             for r in rows_buf:
-                out.write(f"{r[0]}\t{r[1]}\t{r[2]}\t{r[3]}\t{r[4]}\n")
+                out.write(f"{escape_tsv_field(r[0])}\t{r[1]}\t{r[2]}\t{r[3]}\t{r[4]}\n")
         os.replace(tmp_path, out_path)
     except BaseException:
         try:
