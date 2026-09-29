@@ -167,8 +167,8 @@ def candidate_indices(
     lvalue: int, band: int, index: "dict[int, list[int]]"
 ) -> "Iterator[int]":
     """Yield threat indices in Lvalue buckets [lvalue-band ... lvalue+band] (mod 256)."""
-    for delta in range(-band, band + 1):
-        bucket = (lvalue + delta) % 256
+    # dict.fromkeys dedupes: for band >= 128 the circular range wraps onto itself.
+    for bucket in dict.fromkeys((lvalue + d) % 256 for d in range(-band, band + 1)):
         for idx in index.get(bucket, ()):
             yield idx
 
@@ -248,6 +248,16 @@ def hash_one_file(
     return (path, t.hexdigest(), st.st_size, st.st_mtime, None)
 
 
+def _make_temp_output(out_path: Path) -> Path:
+    """Create a sibling temp file with umask-respecting permissions (mkstemp forces 0600)."""
+    fd, name = tempfile.mkstemp(prefix=out_path.name + ".", dir=str(out_path.parent))
+    os.close(fd)
+    umask = os.umask(0)
+    os.umask(umask)
+    os.chmod(name, 0o666 & ~umask)
+    return Path(name)
+
+
 _HASH_TSV_HEADER = "site_path\tdigest\tsize\tmtime\n"
 
 
@@ -266,9 +276,7 @@ def cmd_hash(args: argparse.Namespace) -> int:
     ))
 
     out_path = Path(args.out)
-    tmp_fd, tmp_name = tempfile.mkstemp(prefix=out_path.name + ".", dir=str(out_path.parent))
-    os.close(tmp_fd)
-    tmp_path = Path(tmp_name)
+    tmp_path = _make_temp_output(out_path)
 
     counts = {"hashed": 0, "skipped_entropy": 0, "errors": 0}
     workers = max(1, args.workers)
@@ -370,9 +378,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     band = lvalue_band(args.threshold)
 
     out_path = Path(args.out)
-    tmp_fd, tmp_name = tempfile.mkstemp(prefix=out_path.name + ".", dir=str(out_path.parent))
-    os.close(tmp_fd)
-    tmp_path = Path(tmp_name)
+    tmp_path = _make_temp_output(out_path)
 
     rows_buf: "list[tuple[str, int, int, str, str]]" = []
     counts = {"scanned": 0, "with_match": 0, "total_matches": 0, "candidates_sum": 0}
@@ -380,26 +386,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
     try:
         for site_path, site_digest in parse_site_digests_file(args.site_digests):
             counts["scanned"] += 1
-            # We could pass band into scan_one_digest, but to compute
-            # candidate count we expand inline:
-            s = tlsh.Tlsh()
-            try:
-                s.fromTlshStr(site_digest)
-            except (ValueError, TypeError):
+            top, n_cands = scan_one_digest_counted(
+                site_digest, threats, index,
+                threshold=args.threshold, top_n=args.top_n, band=band,
+            )
+            counts["candidates_sum"] += n_cands
+            if not top:
                 continue
-            cands = list(candidate_indices(s.lvalue, band, index))
-            counts["candidates_sum"] += len(cands)
-            scored = []
-            for ti in cands:
-                t_obj, t_digest, t_path = threats[ti]
-                d = s.diff(t_obj)
-                if d <= args.threshold:
-                    scored.append((d, t_digest, t_path))
-            if not scored:
-                continue
-            scored.sort(key=lambda r: (r[0], r[2]))
             counts["with_match"] += 1
-            for rank, (d, t_digest, t_path) in enumerate(scored[: args.top_n], start=1):
+            for rank, (d, t_digest, t_path) in enumerate(top, start=1):
                 rows_buf.append((site_path, rank, d, t_digest, t_path))
                 counts["total_matches"] += 1
 
@@ -459,6 +454,37 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
+def scan_one_digest_counted(
+    site_digest: str,
+    threats: "list[tuple[tlsh.Tlsh, str, str]]",
+    index: "dict[int, list[int]]",
+    *,
+    threshold: int,
+    top_n: int,
+    band: int,
+) -> "tuple[list[tuple[int, str, str]], int]":
+    """Return (top-N matches, candidate count) for one site digest.
+
+    Matches are (distance, threat_digest, threat_path) sorted by (distance,
+    threat_path); empty if no candidate passes the threshold.
+    """
+    s = tlsh.Tlsh()
+    try:
+        s.fromTlshStr(site_digest)
+    except (ValueError, TypeError):
+        return [], 0
+    scored: "list[tuple[int, str, str]]" = []
+    n_cands = 0
+    for ti in candidate_indices(s.lvalue, band, index):
+        n_cands += 1
+        t_obj, t_digest, t_path = threats[ti]
+        d = s.diff(t_obj)
+        if d <= threshold:
+            scored.append((d, t_digest, t_path))
+    scored.sort(key=lambda r: (r[0], r[2]))
+    return scored[:top_n], n_cands
+
+
 def scan_one_digest(
     site_digest: str,
     threats: "list[tuple[tlsh.Tlsh, str, str]]",
@@ -468,23 +494,10 @@ def scan_one_digest(
     top_n: int,
     band: int,
 ) -> "list[tuple[int, str, str]]":
-    """For one site digest, return top-N matches: list of (distance, threat_digest, threat_path).
-
-    Sorted by (distance, threat_path); empty list if no candidates pass threshold.
-    """
-    s = tlsh.Tlsh()
-    try:
-        s.fromTlshStr(site_digest)
-    except (ValueError, TypeError):
-        return []
-    scored: "list[tuple[int, str, str]]" = []
-    for ti in candidate_indices(s.lvalue, band, index):
-        t_obj, t_digest, t_path = threats[ti]
-        d = s.diff(t_obj)
-        if d <= threshold:
-            scored.append((d, t_digest, t_path))
-    scored.sort(key=lambda r: (r[0], r[2]))
-    return scored[:top_n]
+    """Top-N matches for one site digest (see scan_one_digest_counted)."""
+    return scan_one_digest_counted(
+        site_digest, threats, index, threshold=threshold, top_n=top_n, band=band
+    )[0]
 
 
 def main(argv: list[str] | None = None) -> int:
