@@ -51,15 +51,13 @@
 # OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#cmake_minimum_required(VERSION 2.6)
-cmake_minimum_required(VERSION 3.10...3.27)
-
+cmake_minimum_required(VERSION 3.10)
 
 project(TLSH)
 
 set(VERSION_MAJOR 5)
 set(VERSION_MINOR 0)
-set(VERSION_PATCH 0)
+set(VERSION_PATCH 2)
 
 # TLSH uses only half the counting buckets.
 # It can use all the buckets now.
@@ -78,6 +76,8 @@ if(TLSH_BUCKETS_256 EQUAL 1)
   set(TLSH_HASH "full hash")
   add_definitions(-DBUCKETS_256)
 endif()
+
+add_definitions(-DTHREADING_IMPLEMENTED)
 
 # TLSH uses 1 byte checksum. The collision rate is 1 in 24.
 # It can use 3 bytes checksum now. That collision rate in 1 in 5800.

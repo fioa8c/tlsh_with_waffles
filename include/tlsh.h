@@ -66,6 +66,7 @@
 #define	TLSH_OPTION_KEEP_BUCKET		4
 #define	TLSH_OPTION_PRIVATE		8
 #define	TLSH_OPTION_THREADED		16
+#define	TLSH_OPTION_THREADED4		32
 
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) || defined(WINDOWS) || defined(MINGW)
 #include "tlsh_win_version.h"
@@ -83,6 +84,14 @@ class TlshImpl;
 
 // Define TLSH_STRING_LEN_REQ, which is the string length of "T1" + the hex value of the Tlsh hash.  
 // BUCKETS_256 & CHECKSUM_3B are compiler switches defined in CMakeLists.txt
+// Make sure BUCKETS_* and CHECHKSUM_?B are always defined, to make tlsh.h and
+// the (static or shared) library self-contained.
+#if !(defined BUCKETS_48 || defined BUCKETS_128 || defined BUCKETS_256)
+  #define BUCKETS_128
+#endif
+#if !(defined CHECKSUM_0B || defined CHECKSUM_1B || defined CHECKSUM_3B)
+  #define CHECKSUM_1B
+#endif
 #if defined BUCKETS_256
   #define TLSH_STRING_LEN_REQ 136
   // changed the minimum data length to 256 for version 3.3
@@ -138,7 +147,7 @@ public:
 
 #if defined BUCKETS_128 && !defined(CHECKSUM_3B)
     /* to get the hex-encoded hash code */
-    const char* getHash(int showvers=1) const;
+    const char* getHash(int showvers=1) const ;
     /* to get the hex-encoded hash code without allocating buffer in TlshImpl - bufSize should be TLSH_STRING_BUFFER_LEN */
     const char* getHash(char *buffer, unsigned int bufSize, int showvers=1) const;
 #else
